@@ -78,8 +78,8 @@ jobs:
                   applicationId "com.example.airstreamclone"
                   minSdk 29
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 3
+                  versionName "3.0"
               }
 
               compileOptions {
@@ -106,6 +106,7 @@ jobs:
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
               <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -114,10 +115,13 @@ jobs:
                   android:allowBackup="true"
                   android:label="Sonos AirStream"
                   android:usesCleartextTraffic="true"
+                  android:allowAudioPlaybackCapture="true"
+                  android:hardwareAccelerated="true"
                   android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
 
                   <activity
                       android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
                       android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
@@ -137,6 +141,8 @@ jobs:
           cat << 'EOF' > app/src/main/java/com/example/airstreamclone/SonosController.kt
           package com.example.airstreamclone
 
+          import java.io.BufferedReader
+          import java.io.InputStreamReader
           import java.io.OutputStreamWriter
           import java.net.DatagramPacket
           import java.net.DatagramSocket
@@ -211,8 +217,18 @@ jobs:
                       </s:Envelope>
                   """.trimIndent()
 
-                  sendSoapAction(sonosIp, "SetAVTransportURI", setUriBody)
-                  sendSoapAction(sonosIp, "Play", playBody)
+                  sendSoapAction(
+                      sonosIp,
+                      "/MediaRenderer/AVTransport/Control",
+                      "urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI",
+                      setUriBody
+                  )
+                  sendSoapAction(
+                      sonosIp,
+                      "/MediaRenderer/AVTransport/Control",
+                      "urn:schemas-upnp-org:service:AVTransport:1#Play",
+                      playBody
+                  )
               }
 
               fun stopSonosStream(sonosIp: String) {
@@ -226,26 +242,98 @@ jobs:
                           </s:Body>
                       </s:Envelope>
                   """.trimIndent()
-                  sendSoapAction(sonosIp, "Stop", stopBody)
+                  sendSoapAction(
+                      sonosIp,
+                      "/MediaRenderer/AVTransport/Control",
+                      "urn:schemas-upnp-org:service:AVTransport:1#Stop",
+                      stopBody
+                  )
               }
 
-              private fun sendSoapAction(sonosIp: String, action: String, xmlBody: String) {
+              /**
+               * Sets the Sonos Play:1 hardware volume (0 to 100) via UPnP RenderingControl.
+               */
+              fun setSonosVolume(sonosIp: String, volume: Int) {
+                  val clampedVol = volume.coerceIn(0, 100)
+                  val volumeBody = """
+                      <?xml version="1.0" encoding="utf-8"?>
+                      <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+                          <s:Body>
+                              <u:SetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+                                  <InstanceID>0</InstanceID>
+                                  <Channel>Master</Channel>
+                                  <DesiredVolume>$clampedVol</DesiredVolume>
+                              </u:SetVolume>
+                          </s:Body>
+                      </s:Envelope>
+                  """.trimIndent()
+                  sendSoapAction(
+                      sonosIp,
+                      "/MediaRenderer/RenderingControl/Control",
+                      "urn:schemas-upnp-org:service:RenderingControl:1#SetVolume",
+                      volumeBody
+                  )
+              }
+
+              /**
+               * Reads the current volume (0 to 100) directly from the Sonos Play:1 speaker.
+               */
+              fun getSonosVolume(sonosIp: String): Int? {
+                  val getVolBody = """
+                      <?xml version="1.0" encoding="utf-8"?>
+                      <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+                          <s:Body>
+                              <u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+                                  <InstanceID>0</InstanceID>
+                                  <Channel>Master</Channel>
+                              </u:GetVolume>
+                          </s:Body>
+                      </s:Envelope>
+                  """.trimIndent()
+
+                  val responseXml = sendSoapAction(
+                      sonosIp,
+                      "/MediaRenderer/RenderingControl/Control",
+                      "urn:schemas-upnp-org:service:RenderingControl:1#GetVolume",
+                      getVolBody
+                  ) ?: return null
+
+                  val regex = Regex("<CurrentVolume>(\\d+)</CurrentVolume>")
+                  val match = regex.find(responseXml)
+                  return match?.groupValues?.get(1)?.toIntOrNull()
+              }
+
+              private fun sendSoapAction(
+                  sonosIp: String,
+                  endpoint: String,
+                  soapAction: String,
+                  xmlBody: String
+              ): String? {
                   try {
-                      val url = URL("http://$sonosIp:1400/MediaRenderer/AVTransport/Control")
+                      val url = URL("http://$sonosIp:1400$endpoint")
                       val conn = url.openConnection() as HttpURLConnection
+                      conn.connectTimeout = 2500
+                      conn.readTimeout = 2500
                       conn.requestMethod = "POST"
                       conn.doOutput = true
                       conn.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"")
-                      conn.setRequestProperty("SOAPAction", "\"urn:schemas-upnp-org:service:AVTransport:1#$action\"")
+                      conn.setRequestProperty("SOAPAction", "\"$soapAction\"")
 
                       OutputStreamWriter(conn.outputStream).use { writer ->
                           writer.write(xmlBody)
                           writer.flush()
                       }
-                      conn.responseCode
+
+                      val responseText = if (conn.responseCode in 200..299) {
+                          BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
+                      } else {
+                          null
+                      }
                       conn.disconnect()
+                      return responseText
                   } catch (e: Exception) {
                       e.printStackTrace()
+                      return null
                   }
               }
           }
@@ -488,6 +576,7 @@ jobs:
           package com.example.airstreamclone
 
           import android.Manifest
+          import android.annotation.SuppressLint
           import android.app.Activity
           import android.content.Context
           import android.content.Intent
@@ -495,6 +584,10 @@ jobs:
           import android.media.projection.MediaProjectionManager
           import android.os.Build
           import android.os.Bundle
+          import android.view.Gravity
+          import android.view.KeyEvent
+          import android.view.View
+          import android.webkit.*
           import android.widget.*
           import androidx.activity.result.contract.ActivityResultContracts
           import androidx.appcompat.app.AppCompatActivity
@@ -502,10 +595,19 @@ jobs:
           import androidx.core.content.ContextCompat
           import kotlin.concurrent.thread
 
+          class BackgroundAudioWebView(context: Context) : WebView(context) {
+              override fun onWindowVisibilityChanged(visibility: Int) {
+                  super.onWindowVisibilityChanged(View.VISIBLE)
+              }
+          }
+
           class MainActivity : AppCompatActivity() {
 
               private lateinit var ipInput: EditText
               private lateinit var statusText: TextView
+              private lateinit var volumeLabel: TextView
+              private lateinit var volumeSeekBar: SeekBar
+              private lateinit var webView: WebView
 
               private val mediaProjectionLauncher = registerForActivityResult(
                   ActivityResultContracts.StartActivityForResult()
@@ -519,38 +621,176 @@ jobs:
                           putExtra(AudioStreamService.EXTRA_SONOS_IP, sonosIp)
                       }
                       ContextCompat.startForegroundService(this, serviceIntent)
-                      statusText.text = "Status: Streaming live WAV to Sonos ($sonosIp)..."
+                      statusText.text = "Streaming live WAV to Sonos ($sonosIp)"
                   }
               }
 
+              @SuppressLint("SetJavaScriptEnabled")
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
-                  val layout = LinearLayout(this).apply {
+                  val rootLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(48, 48, 48, 48)
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.MATCH_PARENT
+                      )
+                  }
+
+                  val controlsBox = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(24, 12, 24, 6)
                   }
 
                   statusText = TextView(this).apply {
-                      text = "Status: Searching for Sonos Play:1..."
-                      textSize = 16f
+                      text = "Scanning Wi-Fi for Sonos Play:1..."
+                      textSize = 12f
+                  }
+
+                  // Row 1: Sonos IP + Scan + Stream + Stop
+                  val sonosRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
                   }
 
                   ipInput = EditText(this).apply {
-                      hint = "Sonos Play:1 IP (e.g. 192.168.1.50)"
+                      hint = "Sonos IP"
+                      textSize = 13f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.5f)
                   }
 
-                  val btnDiscover = Button(this).apply { text = "Auto-Discover Sonos Play:1" }
-                  val btnStart = Button(this).apply { text = "Start Streaming to Sonos" }
-                  val btnStop = Button(this).apply { text = "Stop Stream" }
+                  val btnDiscover = Button(this).apply {
+                      text = "Scan"
+                      textSize = 11f
+                  }
+                  val btnStart = Button(this).apply {
+                      text = "Stream"
+                      textSize = 11f
+                  }
+                  val btnStop = Button(this).apply {
+                      text = "Stop"
+                      textSize = 11f
+                  }
+
+                  sonosRow.addView(ipInput)
+                  sonosRow.addView(btnDiscover)
+                  sonosRow.addView(btnStart)
+                  sonosRow.addView(btnStop)
+
+                  // Row 2: Sonos Hardware Volume Slider (0 - 100%)
+                  val volumeRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(0, 4, 0, 4)
+                  }
+
+                  volumeLabel = TextView(this).apply {
+                      text = "Sonos Vol: 25%"
+                      textSize = 12f
+                  }
+
+                  volumeSeekBar = SeekBar(this).apply {
+                      max = 100
+                      progress = 25
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+
+                  volumeSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                          volumeLabel.text = "Sonos Vol: $progress%"
+                          if (fromUser) {
+                              val sonosIp = ipInput.text.toString().trim()
+                              if (sonosIp.isNotEmpty()) {
+                                  thread { SonosController.setSonosVolume(sonosIp, progress) }
+                              }
+                          }
+                      }
+                      override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                      override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                  })
+
+                  volumeRow.addView(volumeLabel)
+                  volumeRow.addView(volumeSeekBar)
+
+                  // Row 3: Quick-Launch Music Source Tabs
+                  val quickTabsRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                  }
+
+                  val btnSpotify = Button(this).apply {
+                      text = "Spotify Web"
+                      textSize = 11f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  val btnSoundCloud = Button(this).apply {
+                      text = "SoundCloud"
+                      textSize = 11f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  val btnYouTube = Button(this).apply {
+                      text = "YouTube"
+                      textSize = 11f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+
+                  quickTabsRow.addView(btnSpotify)
+                  quickTabsRow.addView(btnSoundCloud)
+                  quickTabsRow.addView(btnYouTube)
+
+                  controlsBox.addView(statusText)
+                  controlsBox.addView(sonosRow)
+                  controlsBox.addView(volumeRow)
+                  controlsBox.addView(quickTabsRow)
+
+                  webView = BackgroundAudioWebView(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          0,
+                          1f
+                      )
+                  }
+
+                  CookieManager.getInstance().setAcceptCookie(true)
+                  CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+
+                  webView.settings.apply {
+                      javaScriptEnabled = true
+                      domStorageEnabled = true
+                      databaseEnabled = true
+                      mediaPlaybackRequiresUserGesture = false
+                      userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                      useWideViewPort = true
+                      loadWithOverviewMode = true
+                      builtInZoomControls = true
+                      displayZoomControls = false
+                  }
+
+                  webView.webChromeClient = object : WebChromeClient() {
+                      override fun onPermissionRequest(request: PermissionRequest) {
+                          runOnUiThread {
+                              request.grant(request.resources)
+                          }
+                      }
+                  }
+
+                  webView.webViewClient = object : WebViewClient() {
+                      override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                          val url = request.url.toString()
+                          if (url.startsWith("http://") || url.startsWith("https://")) {
+                              return false
+                          }
+                          return true
+                      }
+                  }
 
                   btnDiscover.setOnClickListener { discoverSonos() }
 
                   btnStart.setOnClickListener {
-                      if (ipInput.text.toString().trim().isEmpty()) {
-                          Toast.makeText(this, "Enter or discover Sonos IP first", Toast.LENGTH_SHORT).show()
+                      val sonosIp = ipInput.text.toString().trim()
+                      if (sonosIp.isEmpty()) {
+                          Toast.makeText(this, "Enter or scan Sonos IP first", Toast.LENGTH_SHORT).show()
                           return@setOnClickListener
                       }
+                      syncSonosVolume(sonosIp)
                       if (checkPermissions()) {
                           val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                           mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
@@ -562,29 +802,83 @@ jobs:
                           action = AudioStreamService.ACTION_STOP
                       }
                       startService(stopIntent)
-                      statusText.text = "Status: Stream Stopped"
+                      statusText.text = "Stream Stopped"
                   }
 
-                  layout.addView(statusText)
-                  layout.addView(ipInput)
-                  layout.addView(btnDiscover)
-                  layout.addView(btnStart)
-                  layout.addView(btnStop)
-                  setContentView(layout)
+                  btnSpotify.setOnClickListener {
+                      webView.loadUrl("https://open.spotify.com")
+                  }
 
+                  btnSoundCloud.setOnClickListener {
+                      webView.loadUrl("https://soundcloud.com/discover")
+                  }
+
+                  btnYouTube.setOnClickListener {
+                      webView.loadUrl("https://music.youtube.com")
+                  }
+
+                  rootLayout.addView(controlsBox)
+                  rootLayout.addView(webView)
+                  setContentView(rootLayout)
+
+                  webView.loadUrl("https://open.spotify.com")
                   discoverSonos()
               }
 
+              // Intercept phone hardware Volume Up / Down buttons to control Sonos speaker volume
+              override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+                  val sonosIp = ipInput.text.toString().trim()
+                  if (sonosIp.isNotEmpty()) {
+                      when (keyCode) {
+                          KeyEvent.KEYCODE_VOLUME_UP -> {
+                              val newVol = (volumeSeekBar.progress + 5).coerceAtMost(100)
+                              volumeSeekBar.progress = newVol
+                              thread { SonosController.setSonosVolume(sonosIp, newVol) }
+                              return true
+                          }
+                          KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                              val newVol = (volumeSeekBar.progress - 5).coerceAtLeast(0)
+                              volumeSeekBar.progress = newVol
+                              thread { SonosController.setSonosVolume(sonosIp, newVol) }
+                              return true
+                          }
+                      }
+                  }
+                  return super.onKeyDown(keyCode, event)
+              }
+
+              @Deprecated("Deprecated in Java")
+              override fun onBackPressed() {
+                  if (webView.canGoBack()) {
+                      webView.goBack()
+                  } else {
+                      super.onBackPressed()
+                  }
+              }
+
               private fun discoverSonos() {
-                  statusText.text = "Status: Scanning Wi-Fi for Sonos Play:1 (SSDP)..."
+                  statusText.text = "Scanning Wi-Fi for Sonos Play:1..."
                   thread {
                       val foundIp = SonosController.discoverSonosIp()
                       runOnUiThread {
                           if (foundIp != null) {
                               ipInput.setText(foundIp)
-                              statusText.text = "Status: Found Sonos at $foundIp"
+                              statusText.text = "Found Sonos at $foundIp"
+                              syncSonosVolume(foundIp)
                           } else {
-                              statusText.text = "Status: Auto-discovery timed out. Enter Sonos IP manually."
+                              statusText.text = "Scan timed out. Enter Sonos IP manually."
+                          }
+                      }
+                  }
+              }
+
+              private fun syncSonosVolume(sonosIp: String) {
+                  thread {
+                      val currentVol = SonosController.getSonosVolume(sonosIp)
+                      if (currentVol != null) {
+                          runOnUiThread {
+                              volumeSeekBar.progress = currentVol
+                              volumeLabel.text = "Sonos Vol: $currentVol%"
                           }
                       }
                   }
@@ -616,4 +910,4 @@ jobs:
           APK_PATH="sonos_build/app/build/outputs/apk/debug/app-debug.apk"
           cp "$APK_PATH" ./Sonos-AirStream.apk
           gh release delete v1.0 -y --repo "${{ github.repository }}" || true
-          gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v1.0" --notes "Direct APK download for Android."
+          gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v3.0 (Built-in Player + Volume Control)" --notes "Direct APK download with Sonos volume slider, hardware volume button control, and built-in Spotify/SoundCloud/YouTube player."
