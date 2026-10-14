@@ -17,10 +17,11 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
+      - name: Download Gradle Directly (Bypass GitHub Cache Outage)
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.5-bin.zip
+          sudo unzip -q -d /opt/gradle gradle-8.5-bin.zip
+          echo "/opt/gradle/gradle-8.5/bin" >> $GITHUB_PATH
 
       - name: Find Project Root and Build APK
         run: |
@@ -34,7 +35,7 @@ jobs:
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           echo "✅ Found Android project in: $PROJECT_DIR"
           cd "$PROJECT_DIR"
-          gradle assembleDebug --stacktrace
+          gradle assembleDebug --no-build-cache --no-daemon --stacktrace
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
