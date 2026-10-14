@@ -1,18 +1,7 @@
 name: Build Sonos APK
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
 
 on:
   push:
-    paths:
-      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
 permissions:
@@ -37,7 +26,7 @@ jobs:
           sudo unzip -q -d /opt/gradle gradle-8.5-bin.zip
           echo "/opt/gradle/gradle-8.5/bin" >> $GITHUB_PATH
 
-      - name: Generate Project & Compile APK
+      - name: Generate Project and Compile APK
         run: |
           mkdir -p sonos_build/app/src/main/java/com/example/airstreamclone
           cd sonos_build
@@ -621,10 +610,10 @@ jobs:
           gradle assembleDebug --no-build-cache --no-daemon --stacktrace
 
       - name: Publish APK to GitHub Releases
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    run: |
-      APK_PATH="sonos_build/app/build/outputs/apk/debug/app-debug.apk"
-      cp "$APK_PATH" ./Sonos-AirStream.apk
-      gh release delete v1.0 -y --repo "${{ github.repository }}" || true
-      gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v1.0" --notes "Direct APK download for Android."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APK_PATH="sonos_build/app/build/outputs/apk/debug/app-debug.apk"
+          cp "$APK_PATH" ./Sonos-AirStream.apk
+          gh release delete v1.0 -y --repo "${{ github.repository }}" || true
+          gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v1.0" --notes "Direct APK download for Android."
