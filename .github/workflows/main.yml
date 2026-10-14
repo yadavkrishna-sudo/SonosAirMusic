@@ -620,18 +620,11 @@ jobs:
 
           gradle assembleDebug --no-build-cache --no-daemon --stacktrace
 
-      - name: Save APK directly into Repository & Releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          APK_PATH="sonos_build/app/build/outputs/apk/debug/app-debug.apk"
-          cp "$APK_PATH" ./Sonos-AirStream.apk
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ./Sonos-AirStream.apk
-          git commit -m "Add compiled Sonos-AirStream.apk" || true
-          git push || true
-
-          gh release delete v1.0 -y --repo "${{ github.repository }}" || true
-          gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v1.0" --notes "Direct APK download for Android."
+      - name: Publish APK to GitHub Releases
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    run: |
+      APK_PATH="sonos_build/app/build/outputs/apk/debug/app-debug.apk"
+      cp "$APK_PATH" ./Sonos-AirStream.apk
+      gh release delete v1.0 -y --repo "${{ github.repository }}" || true
+      gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v1.0" --notes "Direct APK download for Android."
