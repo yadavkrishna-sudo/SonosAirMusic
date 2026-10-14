@@ -22,11 +22,22 @@ jobs:
         with:
           gradle-version: '8.5'
 
-      - name: Build Debug APK
-        run: gradle assembleDebug
+      - name: Find Project Root and Build APK
+        run: |
+          echo "=== Repository Structure ==="
+          find . -maxdepth 4 -not -path '*/.*'
+          SETTINGS_FILE=$(find . -name "settings.gradle" | head -n 1)
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "❌ ERROR: settings.gradle was not uploaded to GitHub!"
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          echo "✅ Found Android project in: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --stacktrace
 
       - name: Upload Compiled APK
         uses: actions/upload-artifact@v4
         with:
           name: Sonos-AirStream-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: "**/build/outputs/apk/debug/app-debug.apk"
