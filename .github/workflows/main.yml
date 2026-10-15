@@ -78,8 +78,8 @@ jobs:
                   applicationId "com.example.airstreamclone"
                   minSdk 29
                   targetSdk 34
-                  versionCode 3
-                  versionName "3.0"
+                  versionCode 4
+                  versionName "4.0"
               }
 
               compileOptions {
@@ -250,9 +250,6 @@ jobs:
                   )
               }
 
-              /**
-               * Sets the Sonos Play:1 hardware volume (0 to 100) via UPnP RenderingControl.
-               */
               fun setSonosVolume(sonosIp: String, volume: Int) {
                   val clampedVol = volume.coerceIn(0, 100)
                   val volumeBody = """
@@ -275,9 +272,6 @@ jobs:
                   )
               }
 
-              /**
-               * Reads the current volume (0 to 100) directly from the Sonos Play:1 speaker.
-               */
               fun getSonosVolume(sonosIp: String): Int? {
                   val getVolBody = """
                       <?xml version="1.0" encoding="utf-8"?>
@@ -584,6 +578,7 @@ jobs:
           import android.media.projection.MediaProjectionManager
           import android.os.Build
           import android.os.Bundle
+          import android.os.Message
           import android.view.Gravity
           import android.view.KeyEvent
           import android.view.View
@@ -608,6 +603,10 @@ jobs:
               private lateinit var volumeLabel: TextView
               private lateinit var volumeSeekBar: SeekBar
               private lateinit var webView: WebView
+
+              // Clean Android Chrome User-Agent (removes "; wv" flag so SoundCloud & YouTube logins work)
+              private val MOBILE_CHROME_UA =
+                  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
               private val mediaProjectionLauncher = registerForActivityResult(
                   ActivityResultContracts.StartActivityForResult()
@@ -711,13 +710,22 @@ jobs:
                   volumeRow.addView(volumeLabel)
                   volumeRow.addView(volumeSeekBar)
 
-                  // Row 3: Quick-Launch Music Source Tabs
+                  // Row 3: Quick-Launch Music Source Tabs + Back + Sign-In Helper
                   val quickTabsRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                   }
 
-                  val btnSpotify = Button(this).apply {
-                      text = "Spotify Web"
+                  val btnBack = Button(this).apply {
+                      text = "◀"
+                      textSize = 11f
+                  }
+                  val btnYouTube = Button(this).apply {
+                      text = "YouTube"
+                      textSize = 11f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  val btnYTMsic = Button(this).apply {
+                      text = "YT Music"
                       textSize = 11f
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
@@ -726,15 +734,17 @@ jobs:
                       textSize = 11f
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
-                  val btnYouTube = Button(this).apply {
-                      text = "YouTube"
+                  val btnSCLogin = Button(this).apply {
+                      text = "SC Sign-In"
                       textSize = 11f
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                   }
 
-                  quickTabsRow.addView(btnSpotify)
-                  quickTabsRow.addView(btnSoundCloud)
+                  quickTabsRow.addView(btnBack)
                   quickTabsRow.addView(btnYouTube)
+                  quickTabsRow.addView(btnYTMsic)
+                  quickTabsRow.addView(btnSoundCloud)
+                  quickTabsRow.addView(btnSCLogin)
 
                   controlsBox.addView(statusText)
                   controlsBox.addView(sonosRow)
@@ -757,11 +767,9 @@ jobs:
                       domStorageEnabled = true
                       databaseEnabled = true
                       mediaPlaybackRequiresUserGesture = false
-                      userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                      useWideViewPort = true
-                      loadWithOverviewMode = true
-                      builtInZoomControls = true
-                      displayZoomControls = false
+                      javaScriptCanOpenWindowsAutomatically = true
+                      setSupportMultipleWindows(true)
+                      userAgentString = MOBILE_CHROME_UA
                   }
 
                   webView.webChromeClient = object : WebChromeClient() {
@@ -769,6 +777,33 @@ jobs:
                           runOnUiThread {
                               request.grant(request.resources)
                           }
+                      }
+
+                      // Route SoundCloud / OAuth login popups directly into the main WebView
+                      override fun onCreateWindow(
+                          view: WebView?,
+                          isDialog: Boolean,
+                          isUserGesture: Boolean,
+                          resultMsg: Message?
+                      ): Boolean {
+                          val tempWebView = WebView(this@MainActivity)
+                          tempWebView.webViewClient = object : WebViewClient() {
+                              override fun shouldOverrideUrlLoading(
+                                  subView: WebView?,
+                                  request: WebResourceRequest?
+                              ): Boolean {
+                                  val targetUrl = request?.url?.toString()
+                                  if (!targetUrl.isNullOrEmpty()) {
+                                      webView.loadUrl(targetUrl)
+                                  }
+                                  tempWebView.destroy()
+                                  return true
+                              }
+                          }
+                          val transport = resultMsg?.obj as? WebView.WebViewTransport
+                          transport?.webView = tempWebView
+                          resultMsg?.sendToTarget()
+                          return true
                       }
                   }
 
@@ -779,6 +814,11 @@ jobs:
                               return false
                           }
                           return true
+                      }
+
+                      override fun onPageFinished(view: WebView?, url: String?) {
+                          super.onPageFinished(view, url)
+                          CookieManager.getInstance().flush()
                       }
                   }
 
@@ -805,27 +845,35 @@ jobs:
                       statusText.text = "Stream Stopped"
                   }
 
-                  btnSpotify.setOnClickListener {
-                      webView.loadUrl("https://open.spotify.com")
-                  }
-
-                  btnSoundCloud.setOnClickListener {
-                      webView.loadUrl("https://soundcloud.com/discover")
+                  btnBack.setOnClickListener {
+                      if (webView.canGoBack()) webView.goBack()
                   }
 
                   btnYouTube.setOnClickListener {
+                      webView.loadUrl("https://m.youtube.com")
+                  }
+
+                  btnYTMsic.setOnClickListener {
                       webView.loadUrl("https://music.youtube.com")
+                  }
+
+                  btnSoundCloud.setOnClickListener {
+                      webView.loadUrl("https://m.soundcloud.com")
+                  }
+
+                  btnSCLogin.setOnClickListener {
+                      // Directly opens SoundCloud's authentication page inside the main WebView
+                      webView.loadUrl("https://soundcloud.com/signin")
                   }
 
                   rootLayout.addView(controlsBox)
                   rootLayout.addView(webView)
                   setContentView(rootLayout)
 
-                  webView.loadUrl("https://open.spotify.com")
+                  webView.loadUrl("https://m.youtube.com")
                   discoverSonos()
               }
 
-              // Intercept phone hardware Volume Up / Down buttons to control Sonos speaker volume
               override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
                   val sonosIp = ipInput.text.toString().trim()
                   if (sonosIp.isNotEmpty()) {
@@ -910,4 +958,4 @@ jobs:
           APK_PATH="sonos_build/app/build/outputs/apk/debug/app-debug.apk"
           cp "$APK_PATH" ./Sonos-AirStream.apk
           gh release delete v1.0 -y --repo "${{ github.repository }}" || true
-          gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v3.0 (Built-in Player + Volume Control)" --notes "Direct APK download with Sonos volume slider, hardware volume button control, and built-in Spotify/SoundCloud/YouTube player."
+          gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v4.0 (SoundCloud Login Fix + Volume Control)" --notes "Direct APK download with SoundCloud Sign-In support, YouTube/YT Music tabs, and Sonos Volume Slider."
