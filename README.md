@@ -3,8 +3,8 @@
 # 🎧 AirStream Cast for Sonos & UPnP
 **Stream live Android internal audio, YouTube, YouTube Music & SoundCloud directly to legacy Sonos Play:1 and UPnP/DLNA speakers—with zero root required.**
 
-[![Download Latest APK](https://img.shields.io/badge/Download_APK-v7.0_(Latest)-22D3EE?style=for-the-badge&logo=android&logoColor=black)](https://github.com/yadavkrishna-sudo/sonos-airstream/releases/latest)
-[![Android 10+](https://img.shields.io/badge/Android-10%2B%20(API%2029%2B)-A855F7?style=for-the-badge&logo=android&logoColor=white)](https://github.com/yadavkrishna-sudo/sonos-airstream/releases/latest)
+[![Download Latest APK](https://img.shields.io/badge/Download_APK-v7.0_(Latest)-22D3EE?style=for-the-badge&logo=android&logoColor=black)](https://github.com/yadavkrishna-sudo/SonosAirMusic/releases/latest)
+[![Android 10+](https://img.shields.io/badge/Android-10%2B%20(API%2029%2B)-A855F7?style=for-the-badge&logo=android&logoColor=white)](https://github.com/yadavkrishna-sudo/SonosAirMusic/releases/latest)
 [![Support on Ko-fi](https://img.shields.io/badge/Support_Development-Ko--fi_%2F_Donate-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](#☕-support--donate)
 
 </div>
@@ -26,7 +26,7 @@ First-generation **Sonos Play:1** and legacy UPnP speakers lack Apple AirPlay, B
 
 ## 📲 Download & Installation
 
-1. **[Click here to download `AirStream-Cast-v7.apk` from GitHub Releases](https://github.com/yadavkrishna-sudo/sonos-airstream/releases/latest)**.
+1. **[Click here to download `AirStream-Cast-v7.apk` from GitHub Releases](https://github.com/yadavkrishna-sudo/SonosAirMusic/releases/latest)**.
 2. Open the downloaded `.apk` file on your Android phone (Android 10 or newer).
 3. If prompted by Google Play Protect during installation, tap **More details** and select **Install anyway**.
 4. Open **AirStream Cast**, tap **Scan** (or enter your Sonos Play:1 IP address), and tap **Stream**!
