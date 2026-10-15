@@ -29,6 +29,7 @@ jobs:
       - name: Generate Project and Compile APK
         run: |
           mkdir -p sonos_build/app/src/main/java/com/example/airstreamclone
+          mkdir -p sonos_build/app/src/main/res/xml
           cd sonos_build
 
           cat << 'EOF' > settings.gradle
@@ -78,8 +79,8 @@ jobs:
                   applicationId "com.example.airstreamclone"
                   minSdk 29
                   targetSdk 34
-                  versionCode 4
-                  versionName "4.0"
+                  versionCode 5
+                  versionName "5.0"
               }
 
               compileOptions {
@@ -95,7 +96,15 @@ jobs:
               implementation 'androidx.core:core-ktx:1.12.0'
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.activity:activity-ktx:1.8.2'
+              implementation 'androidx.media:media:1.7.0'
           }
+          EOF
+
+          cat << 'EOF' > app/src/main/res/xml/automotive_app_desc.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <automotiveApp>
+              <uses name="media" />
+          </automotiveApp>
           EOF
 
           cat << 'EOF' > app/src/main/AndroidManifest.xml
@@ -119,8 +128,13 @@ jobs:
                   android:hardwareAccelerated="true"
                   android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
 
+                  <meta-data
+                      android:name="com.google.android.gms.car.application"
+                      android:resource="@xml/automotive_app_desc" />
+
                   <activity
                       android:name=".MainActivity"
+                      android:launchMode="singleTask"
                       android:configChanges="orientation|screenSize|keyboardHidden"
                       android:exported="true">
                       <intent-filter>
@@ -134,8 +148,246 @@ jobs:
                       android:enabled="true"
                       android:exported="false"
                       android:foregroundServiceType="mediaProjection" />
+
+                  <service
+                      android:name=".CarAudioService"
+                      android:enabled="true"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.media.browse.MediaBrowserService" />
+                      </intent-filter>
+                  </service>
               </application>
           </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/airstreamclone/WebPlayerBridge.kt
+          package com.example.airstreamclone
+
+          import android.content.Context
+          import android.content.Intent
+          import android.os.Handler
+          import android.os.Looper
+          import android.webkit.WebView
+
+          object WebPlayerBridge {
+              var webView: WebView? = null
+              var lastSavedSonosIp: String = ""
+              private val mainHandler = Handler(Looper.getMainLooper())
+
+              fun loadSource(context: Context, url: String) {
+                  mainHandler.post {
+                      val wv = webView
+                      if (wv != null) {
+                          wv.loadUrl(url)
+                      } else {
+                          val launchIntent = Intent(context, MainActivity::class.java).apply {
+                              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                              putExtra("AUTO_LOAD_URL", url)
+                          }
+                          context.startActivity(launchIntent)
+                      }
+                  }
+              }
+
+              fun play() {
+                  runJs("""
+                      (function() {
+                          var media = document.querySelector('video, audio');
+                          if (media) { media.play(); }
+                          else {
+                              var playBtn = document.querySelector('[aria-label*="Play"], .playControl, .sc-button-play');
+                              if (playBtn) playBtn.click();
+                          }
+                      })();
+                  """.trimIndent())
+              }
+
+              fun pause() {
+                  runJs("""
+                      (function() {
+                          var media = document.querySelector('video, audio');
+                          if (media) { media.pause(); }
+                          else {
+                              var pauseBtn = document.querySelector('[aria-label*="Pause"], .playControl.playing, .sc-button-pause');
+                              if (pauseBtn) pauseBtn.click();
+                          }
+                      })();
+                  """.trimIndent())
+              }
+
+              fun nextTrack() {
+                  runJs("""
+                      (function() {
+                          var nextBtn = document.querySelector('.next-button, [aria-label*="Next"], .skipControl__next');
+                          if (nextBtn) { nextBtn.click(); }
+                          else {
+                              var media = document.querySelector('video, audio');
+                              if (media) media.currentTime += 30;
+                          }
+                      })();
+                  """.trimIndent())
+              }
+
+              fun prevTrack() {
+                  runJs("""
+                      (function() {
+                          var prevBtn = document.querySelector('.previous-button, [aria-label*="Previous"], .skipControl__previous');
+                          if (prevBtn) { prevBtn.click(); }
+                          else {
+                              var media = document.querySelector('video, audio');
+                              if (media) media.currentTime = Math.max(0, media.currentTime - 15);
+                          }
+                      })();
+                  """.trimIndent())
+              }
+
+              private fun runJs(script: String) {
+                  mainHandler.post {
+                      webView?.evaluateJavascript(script, null)
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/airstreamclone/CarAudioService.kt
+          package com.example.airstreamclone
+
+          import android.os.Bundle
+          import android.support.v4.media.MediaBrowserCompat
+          import android.support.v4.media.MediaDescriptionCompat
+          import android.support.v4.media.MediaMetadataCompat
+          import android.support.v4.media.session.MediaSessionCompat
+          import android.support.v4.media.session.PlaybackStateCompat
+          import androidx.media.MediaBrowserServiceCompat
+
+          class CarAudioService : MediaBrowserServiceCompat() {
+
+              private lateinit var mediaSession: MediaSessionCompat
+
+              override fun onCreate() {
+                  super.onCreate()
+
+                  mediaSession = MediaSessionCompat(this, "SonosAirStreamCarSession").apply {
+                      setCallback(object : MediaSessionCompat.Callback() {
+                          override fun onPlay() {
+                              WebPlayerBridge.play()
+                              updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                          }
+
+                          override fun onPause() {
+                              WebPlayerBridge.pause()
+                              updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+                          }
+
+                          override fun onStop() {
+                              WebPlayerBridge.pause()
+                              updatePlaybackState(PlaybackStateCompat.STATE_STOPPED)
+                          }
+
+                          override fun onSkipToNext() {
+                              WebPlayerBridge.nextTrack()
+                              updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                          }
+
+                          override fun onSkipToPrevious() {
+                              WebPlayerBridge.prevTrack()
+                              updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                          }
+
+                          override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
+                              when (mediaId) {
+                                  "yt_home" -> {
+                                      WebPlayerBridge.loadSource(this@CarAudioService, "https://m.youtube.com")
+                                      updateMetadata("YouTube", "Sonos AirStream Web Player")
+                                      updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                                  }
+                                  "yt_music" -> {
+                                      WebPlayerBridge.loadSource(this@CarAudioService, "https://music.youtube.com")
+                                      updateMetadata("YouTube Music", "Sonos AirStream Web Player")
+                                      updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                                  }
+                                  "soundcloud" -> {
+                                      WebPlayerBridge.loadSource(this@CarAudioService, "https://m.soundcloud.com")
+                                      updateMetadata("SoundCloud", "Sonos AirStream Web Player")
+                                      updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                                  }
+                                  "resume_current" -> {
+                                      WebPlayerBridge.play()
+                                      updateMetadata("Active Web Stream", "Playing via Sonos AirStream")
+                                      updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                                  }
+                              }
+                          }
+                      })
+                      isActive = true
+                  }
+
+                  sessionToken = mediaSession.sessionToken
+                  updateMetadata("Sonos AirStream", "Select a source below")
+                  updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+              }
+
+              private fun updateMetadata(title: String, artist: String) {
+                  val metadata = MediaMetadataCompat.Builder()
+                      .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+                      .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
+                      .build()
+                  mediaSession.setMetadata(metadata)
+              }
+
+              private fun updatePlaybackState(state: Int) {
+                  val playbackState = PlaybackStateCompat.Builder()
+                      .setActions(
+                          PlaybackStateCompat.ACTION_PLAY or
+                          PlaybackStateCompat.ACTION_PAUSE or
+                          PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                          PlaybackStateCompat.ACTION_STOP or
+                          PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                          PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                          PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID
+                      )
+                      .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
+                      .build()
+                  mediaSession.setPlaybackState(playbackState)
+              }
+
+              override fun onGetRoot(
+                  clientPackageName: String,
+                  clientUid: Int,
+                  rootHints: Bundle?
+              ): BrowserRoot {
+                  return BrowserRoot("root", null)
+              }
+
+              override fun onLoadChildren(
+                  parentId: String,
+                  result: Result<MutableList<MediaBrowserCompat.MediaItem>>
+              ) {
+                  val items = mutableListOf<MediaBrowserCompat.MediaItem>()
+                  if (parentId == "root") {
+                      items.add(createPlayableItem("resume_current", "▶ Resume Current Stream", "Play active WebView audio"))
+                      items.add(createPlayableItem("yt_home", "YouTube", "Launch YouTube in AirStream"))
+                      items.add(createPlayableItem("yt_music", "YouTube Music", "Launch YT Music in AirStream"))
+                      items.add(createPlayableItem("soundcloud", "SoundCloud", "Launch SoundCloud in AirStream"))
+                  }
+                  result.sendResult(items)
+              }
+
+              private fun createPlayableItem(id: String, title: String, subtitle: String): MediaBrowserCompat.MediaItem {
+                  val desc = MediaDescriptionCompat.Builder()
+                      .setMediaId(id)
+                      .setTitle(title)
+                      .setSubtitle(subtitle)
+                      .build()
+                  return MediaBrowserCompat.MediaItem(desc, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE)
+              }
+
+              override fun onDestroy() {
+                  mediaSession.release()
+                  super.onDestroy()
+              }
+          }
           EOF
 
           cat << 'EOF' > app/src/main/java/com/example/airstreamclone/SonosController.kt
@@ -604,7 +856,6 @@ jobs:
               private lateinit var volumeSeekBar: SeekBar
               private lateinit var webView: WebView
 
-              // Clean Android Chrome User-Agent (removes "; wv" flag so SoundCloud & YouTube logins work)
               private val MOBILE_CHROME_UA =
                   "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
@@ -613,6 +864,7 @@ jobs:
               ) { result ->
                   val sonosIp = ipInput.text.toString().trim()
                   if (result.resultCode == Activity.RESULT_OK && result.data != null && sonosIp.isNotEmpty()) {
+                      WebPlayerBridge.lastSavedSonosIp = sonosIp
                       val serviceIntent = Intent(this, AudioStreamService::class.java).apply {
                           action = AudioStreamService.ACTION_START
                           putExtra(AudioStreamService.EXTRA_RESULT_CODE, result.resultCode)
@@ -646,7 +898,6 @@ jobs:
                       textSize = 12f
                   }
 
-                  // Row 1: Sonos IP + Scan + Stream + Stop
                   val sonosRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                   }
@@ -675,7 +926,6 @@ jobs:
                   sonosRow.addView(btnStart)
                   sonosRow.addView(btnStop)
 
-                  // Row 2: Sonos Hardware Volume Slider (0 - 100%)
                   val volumeRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -710,7 +960,6 @@ jobs:
                   volumeRow.addView(volumeLabel)
                   volumeRow.addView(volumeSeekBar)
 
-                  // Row 3: Quick-Launch Music Source Tabs + Back + Sign-In Helper
                   val quickTabsRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                   }
@@ -759,6 +1008,8 @@ jobs:
                       )
                   }
 
+                  WebPlayerBridge.webView = webView
+
                   CookieManager.getInstance().setAcceptCookie(true)
                   CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
@@ -779,7 +1030,6 @@ jobs:
                           }
                       }
 
-                      // Route SoundCloud / OAuth login popups directly into the main WebView
                       override fun onCreateWindow(
                           view: WebView?,
                           isDialog: Boolean,
@@ -862,7 +1112,6 @@ jobs:
                   }
 
                   btnSCLogin.setOnClickListener {
-                      // Directly opens SoundCloud's authentication page inside the main WebView
                       webView.loadUrl("https://soundcloud.com/signin")
                   }
 
@@ -870,8 +1119,17 @@ jobs:
                   rootLayout.addView(webView)
                   setContentView(rootLayout)
 
-                  webView.loadUrl("https://m.youtube.com")
+                  val initialUrl = intent?.getStringExtra("AUTO_LOAD_URL") ?: "https://m.youtube.com"
+                  webView.loadUrl(initialUrl)
                   discoverSonos()
+              }
+
+              override fun onNewIntent(intent: Intent?) {
+                  super.onNewIntent(intent)
+                  val autoUrl = intent?.getStringExtra("AUTO_LOAD_URL")
+                  if (!autoUrl.isNullOrEmpty() && ::webView.isInitialized) {
+                      webView.loadUrl(autoUrl)
+                  }
               }
 
               override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -911,6 +1169,7 @@ jobs:
                       runOnUiThread {
                           if (foundIp != null) {
                               ipInput.setText(foundIp)
+                              WebPlayerBridge.lastSavedSonosIp = foundIp
                               statusText.text = "Found Sonos at $foundIp"
                               syncSonosVolume(foundIp)
                           } else {
@@ -946,6 +1205,13 @@ jobs:
                   }
                   return true
               }
+
+              override fun onDestroy() {
+                  if (WebPlayerBridge.webView == webView) {
+                      WebPlayerBridge.webView = null
+                  }
+                  super.onDestroy()
+              }
           }
           EOF
 
@@ -958,4 +1224,4 @@ jobs:
           APK_PATH="sonos_build/app/build/outputs/apk/debug/app-debug.apk"
           cp "$APK_PATH" ./Sonos-AirStream.apk
           gh release delete v1.0 -y --repo "${{ github.repository }}" || true
-          gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v4.0 (SoundCloud Login Fix + Volume Control)" --notes "Direct APK download with SoundCloud Sign-In support, YouTube/YT Music tabs, and Sonos Volume Slider."
+          gh release create v1.0 ./Sonos-AirStream.apk --repo "${{ github.repository }}" --title "Sonos AirStream APK v5.0 (Android Auto + Sonos Volume + Web Player)" --notes "Direct APK download with Android Auto dashboard support, Sonos hardware volume slider, and SoundCloud/YouTube web player."
