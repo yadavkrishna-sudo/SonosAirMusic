@@ -44,7 +44,7 @@ Because this app is installed outside the Google Play Store, enable **Unknown so
 
 **AirStream Cast** is free and built for the community. If it breathed new life into your Sonos Play:1 speaker, consider buying me a coffee to support future updates!
 
-* 🌍 **International (Ko-fi / PayPal / Card):** **[ko-fi.com/YOUR_USERNAME](https://ko-fi.com/krishnayadav47442)**
+* 🌍 **International (Ko-fi / PayPal / Card):** **(https://ko-fi.com/krishnayadav47442)**
 * 🇮🇳 **India (UPI — GPay / PhonePe / Paytm):** 'rocks.krishna-1@okhdfcbank` *(or tap the **☕ Donate** button inside the app!)*
 
 ---
